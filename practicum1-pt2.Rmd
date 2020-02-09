@@ -1,0 +1,147 @@
+
+```{r}
+library(data.table)
+library(tidyverse)
+library(rsample)
+library(recipes)
+```
+
+
+# Problem 2
+
+> 1. (0 pts) Investigate this data set of home prices in King County (USA).
+
+> 2. (5 pts) Save the price column in a separate vector/dataframe called target_data. Move all of the columns except the ID, date, price, yr_renovated, zipcode, lat, long, sqft_living15, and sqft_lot15 columns into a new data frame called train_data.
+
+
+```{r}
+housing <- read_csv("data/kc_house_data.csv") %>% 
+  select(-c(id, date, yr_renovated, zipcode, lat, long, sqft_living15, sqft_lot15))
+```
+
+
+> 3. (5 pts) Normalize all of the columns (except the boolean columns waterfront and view) using min-max normalization.
+
+As this is extremely computationally intensive to calculate the distances, I will do this on a sample.
+
+```{r}
+house_rec <- recipe(price ~ ., data = housing,
+                    retain = TRUE) %>% 
+  step_range(contains("sqft"), 
+             min = 0, max = 1) %>% 
+  prep()
+
+# extract the pre-processed data 
+house_pp <- juice(house_rec) %>% 
+  mutate(id = row_number())
+
+# split the data into 50%
+house_split <- initial_split(house_pp, .5)
+```
+
+The below code chunk is similar to the `tidy_dist()` function above but it utilizes `data.table` rather than `tidyr` for data reshaping. This is done for performance puproses. Manipulating matrixes is a very computationally intesive exercise. In order for this to be performative, C++ code would need to be written. As noted previously, KNN does not scale well.
+
+
+```{r}
+# define distance function using data.table
+dt_dist <- function(df, id_col) {
+  
+  # calculate the euclidian distance between all observations
+  # cast as a matrix
+  mdist <- select(df, - {{ id_col }}) %>% 
+    dist(diag = TRUE, upper = FALSE) %>% 
+    as.matrix(labels = TRUE)
+  
+  # convert the matrix to a data.table
+  # reshape into tidy format with `melt()`
+  # cast back into a tibble
+  ret <- as.data.table(mdist) %>% 
+    setNames(as.character(pull(df, {{ id_col }}))) %>% 
+    .[, id := pull(df, {{ id_col }})] %>% 
+    setkey(id) %>% 
+    melt(id.vars = "id",
+         variable.name = "item2", 
+         value.name = "distance") %>% 
+    as_tibble()
+  
+  # remove the lower triangle
+  ret[!upper.tri(mdist),] %>%
+    # remove diag
+    filter(distance != 0)
+}
+```
+
+The below code chunk creates a new data frame with the required field.
+
+```{r}
+new_df <- tibble(
+  bedrooms = 4,
+  bathrooms = 3,
+  sqft_living = 4852,
+  sqft_lot = 10244,
+  floors = 3,
+  waterfront = 0,
+  view = 1,
+  condition = 3,
+  grade = 11, 
+  sqft_above = 1960,
+  sqft_basement = 820,
+  yr_built = 1978
+)
+```
+
+> 4. (15 pts) Build a function called knn.reg that implements a regression version of kNN that averages the prices of the k nearest neighbors using a weighted average where the weight is 3 for the closest neighbor, 2 for the second closest and 1 for the remaining neighbors (recall that a weighted average requires that you divide the sum product of the weight and values by the sum of the weights).
+
+The below code chunk creates a function for calculating the k nearest neighbors and returns the weighted average of the specified `target` column. 
+
+Note that I have not assigned the function name `knn.reg` for the above specified reasons. The period is reserved for defining S3 function methods. Addionally, I'd reordered and renamed the function arguments to be more informative and instinctually positioned. The function takes `target` as the unquoted column name from `train` and utilized `{{ }}` for tidy evaluation. 
+
+```{r}
+# The data needs to be pre-processed
+# I'm providing the recipe object inside of the function
+# this makes it rely on external objects.
+# This is not good practice. You _must_ run the above code first
+knn_reg <- function(new_data, train, target, k) {
+  
+  # apply the pre-processing steps to the new data and "training" data
+  # create an ID column as needed for the distance formula
+  full_df <- bake(house_rec, new_data) %>% 
+    mutate(id = -999) %>% 
+    bind_rows(
+      bake(house_rec, train) %>% 
+        mutate(id = row_number())
+    )
+  
+  # calculate euclidean distance 
+  house_dist <- dt_dist(full_df, id)
+  
+  # find k nearest neighbors 
+  top_k <- house_dist %>% 
+    # removing factor class as it slows it down
+    mutate(item2 = as.character(item2)) %>% 
+    group_by(item2) %>% 
+    # grab the k nears neighbors based on distance measure
+    top_n(-k, distance) %>% 
+    # calculating the descending rank which will be used as the weight
+    mutate(rank = frankv(distance, order = -1))
+  
+  top_k %>% 
+    # join back to original data to get target column values from
+    # the "train" data
+    left_join(full_df, by = "id") %>% 
+    # identify only the `new_data`
+    filter(item2 == -999) %>% 
+    # calculate the weighted average and the unweighted average
+    summarise(wgt_estimate = sum(({{ target }} * rank)) / sum(rank),
+           estimate = mean(price))
+}
+```
+
+> 5. (5 pts) Forecast the price of this new home using your regression kNN using k = 4:
+
+Identify the weighted average of `price` based on the 4 nearest neighbors for the `new_df`.
+
+```{r}
+pred <- knn_reg(new_df, training(house_split), price, 4)
+```
+
