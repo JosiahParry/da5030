@@ -1,10 +1,12 @@
 ---
 title: "Practicum 1"
 author: "Josiah Parry"
-date: "2020-01-02"
-output: 
-  pdf_document: 
+date: '2020-01-02'
+output:
+  pdf_document:
     latex_engine: xelatex
+  html_document:
+    df_print: paged
 ---
 
 # Problem 1
@@ -19,34 +21,42 @@ options(scipen = 17)
 library(tidyverse)
 library(rsample)
 library(recipes)
+
+# create vector of column names 
 colnames <- c("id", "ri", "na", "mg", "al", "si", "k", "ca", "ba", "fe", "type")
 
-glass <- read_csv("data/glass.data", col_names = colnames)
- 
-skimr::skim_to_list(glass) %>%
-  pluck(1) %>%
-  knitr::kable()
+# read in the csv
+glass <- read_csv("data/glass.data", 
+                  col_names = colnames)
 
+# skim the data for visual of distributions and missingness
+# commented out because the `hist` won't knit to pdf
+# skimr::skim_to_list(glass) %>%
+#   pluck(1) %>%
+#   knitr::kable()
 ```
 
 
 > (5 pts) Create a histogram of column 2 (refractive index) and overlay a normal curve; visually determine whether the data is normally distributed. 
+
+Utilize `ggplot2` to create a histogram with an overlain normal distribution.
 
 ```{r}
 # plotting hist over fr
 ggplot(glass, aes(ri)) +
   geom_histogram(aes(y = ..density..), bins = 10) +
   stat_function(fun = dnorm,
-                args = list(mean = mean(glass$na),
-                            sd = sd(glass$na)))
+                args = list(mean = mean(glass$ri),
+                            sd = sd(glass$ri)))
 ```
+
+Conduct a shapiro test for normality.
 
 ```{r}
 shapiro.test(glass$ri)
 ```
 
-
-The shapiro test returns a p value < 0.001. We can tehn conclude that the distribution is in fact not normaly distributed.
+The shapiro test returns a p value < 0.001. We can then conclude that the distribution is in fact not normaly distributed.
 
 > (5 pts) Does the k-NN algorithm require normally distributed data or is it a non-parametric method? Comment on your findings.
 
@@ -56,15 +66,20 @@ k-nearest neighbors is a non parametric model that does not require normally dis
 
 ```{r}
 outs <- glass %>% 
+  # standardize all vars
   mutate_at(vars(everything(), -id), scale) %>% 
+  # reshape 
   pivot_longer(cols = -id, names_to = "var", values_to = "z") %>% 
   filter(abs(z) > 2)
 
 knitr::kable(count(outs, var, sort = TRUE))
 ```
+
 Following a z-score approach, there are a total of `r nrow(outs)` outliers. Outliers should not be removed from the data. We have no valid explanation of _why_ they should be removed. They may very well be properly observed data and are in fact representative of the underlying distribution. Outliers should only be observed if a strong case for their removal can be made such as measurement error.
 
 > (10 pts) After removing the ID column (column 1), normalize the numeric columns, except the last one, using z-score standardization. The last column is the glass type and so it is excluded.
+
+The is done in the recipe prep stage below. =
 
 > (10 pts) The data set is sorted, so creating a validation data set requires random selection of elements. Create a stratified sample where you randomly select 20% of each of the cases for each glass type to be part of the validation data set. The remaining cases will form the training data set.
 
@@ -100,11 +115,12 @@ First, I create a function that calculates the euclidian distance for all observ
 ```{r}
 tidy_dist <- function(df, id_col) {
   
+  # calculate the euclidian distances 
   mdist <- select(df, -{{ id_col }}) %>% 
     dist(diag = TRUE, upper = FALSE) %>% 
     as.matrix(labels = TRUE)
 
-  
+  # reshape the distance matrix into a dataframe
   ret <- as.data.frame(mdist) %>% 
     setNames(pull(df, id)) %>% 
     mutate(id = pull(df, id)) %>% 
@@ -112,14 +128,17 @@ tidy_dist <- function(df, id_col) {
     as_tibble()
   
   # remove upper triangle
+  # this removes duplicate values
   ret[!upper.tri(mdist),] %>%
     # remove diag
+    # removes distance from self
     filter(distance != 0)
   
 }
 ```
 
 Next, we need to apply the normalization steps to the data.
+
 ```{r}
 baked_train <- bake(train_rec, train_df)
 ```
@@ -130,10 +149,11 @@ Then I calculate distances for all observations using this new function.
 glass_dist <- tidy_dist(baked_train, id)
 ```
 
-Then, to identify which type each observation actually belongs to I join it back to the original data set using the `id` column. I select only the `id` and `type` columns for simplicity and data reduction. Following, I identify the 6 observations with the smalled euclidian distance then assign a predicted class based on majority vote.
+Then, to identify which type each observation actually belongs to, I join it back to the original data set using the `id` column. I select only the `id` and `type` columns for simplicity and data reduction. Following, I identify the 6 observations with the smalled euclidian distance then assign a predicted class based on majority vote.
 
 ```{r}
-# define mode function 
+# define mode function because base R
+# still doesn't have mode??!?! bah.
 mode <- function(x) {
   ux <- unique(x)
   ux[which.max(tabulate(match(x, ux)))]
@@ -143,10 +163,13 @@ mode <- function(x) {
 
 
 ```{r}
+# joining distance matrix back onto original data
 preds <- left_join(glass_dist, 
           select(glass, id, type)) %>% 
   group_by(item2) %>% 
+  # filtering to only the 6 closest neighbors
   top_n(-6, distance) %>% 
+  # identify most observed class
   summarise(class = mode(type)) %>% 
   mutate(item2 = as.integer(item2)) %>% 
   left_join(select(glass, id, type), 
@@ -212,7 +235,7 @@ new_dat <- tribble(
   mutate(id = 999)
 ```
 
-I create the predictions using purrr. We must iterate because if we add other observations it creates an inacurate distance measure for the single observation.
+I create the predictions using `purrr`. We must iterate because if we add other observations it creates an inacurate distance measure for the single observation.
 
 ```{r}
 map_dbl(1:2, ~{
@@ -241,7 +264,7 @@ class_preds <- knn(
   k = 6)
 ```
 
-I define my own testing set and perform my own predictions below. Note that the preprocessing occurs within the `classify_type()` function.
+I define my own testing set and perform my own predictions below. Note that the preprocessing occurs within the `classify_type()` function that was defined previously.
 
 ```{r}
 testing_set <- testing(init_split) %>% 
@@ -287,6 +310,7 @@ glass_knn <- function(k) {
 ```
 
 ```{r}
+# create a tibble of predictions for k [2, 10] with class::knn
 k_preds <- map_dfr(2:10, ~{
   class_preds <- knn(
     train = select(baked_train, -id, -type), 
@@ -302,17 +326,22 @@ k_preds <- map_dfr(2:10, ~{
   )
   
 }) %>% 
+  # create tibble of predictions for k [2, 10] using my own function
   bind_rows(
     map_dfr(2:10, glass_knn, .id = "k") %>% 
-  mutate(k = as.integer(k) + 1,
-         method = "mine")
+      mutate(k = as.integer(k) + 1,
+             method = "mine")
   )
 
-
+# visualize "error"
 k_preds %>%
   ggplot(aes(k, misclass, color = method)) +
   geom_line() +
-  geom_point()
+  geom_point() +
+  labs(title = "Misclassification rate",
+       y = "Misclassification") +
+  scale_y_continuous(labels = scales::percent) +
+  theme(legend.position = "bottom")
 ```
 
 
@@ -330,7 +359,7 @@ table(class_preds, baked_test$type)
 
 > (10 pts) Download this (modified) version of the Glass data set containing missing values in column 4. Identify the missing values. Impute the missing values using your version of kNN from Problem 2 below using the other columns are predictor features.
 
-I am unsure specifically what is being asked. I am going to work under the assumption that it is desired to impute the mp values into the newly downloaded data using our self-created KNN algorithm where the "training" data is the full glass data set and the "test" set is the missing values. 
+I am unsure specifically what is being asked. I am going to work under the assumption that it is desired to impute the `mp` values into the newly downloaded data using our self-created KNN algorithm where the "training" data is the full glass data set and the "test" set is the missing values. 
 
 Since the type of imputation was not specified I will impute the average `mg` value.
 
@@ -346,6 +375,7 @@ skimr::skim(new_glass)
 mg_missing <- filter(new_glass, is.na(mg))
 ```
 
+Below I create a function to identify k neighbors.
 
 ```{r}
 # create general function to find the neighbors 
@@ -371,7 +401,11 @@ find_neighbors <- function(new_data, k) {
     select(neighbor = id, input_id = item2) %>% 
     select(2, 1) 
 }
+```
 
+Below I iterate over the missing observations and find the 6 nearest neighbors.
+
+```{r}
 # iterate over missing rows
 mg_neighbors <- map_dfr(1:nrow(mg_missing), ~{
   find_neighbors(
@@ -379,12 +413,20 @@ mg_neighbors <- map_dfr(1:nrow(mg_missing), ~{
     6)
 }
 )
+```
 
+I then find the average `mg` value for the 6 neighbors.
+
+```{r}
 # take 6 closest neighbors and calculate mean mg values
 imputed_mg <- left_join(mg_neighbors, glass, by = c("neighbor" = "id")) %>% 
   group_by(input_id) %>% 
   summarise(mg = mean(mg))
-  
+```
+
+The last step is to put the imputed data back into the dataframe.
+
+```{r}
 # bind rows and all is well.
 all_imputed <- mg_missing %>% 
   mutate(mg = pull(arrange(imputed_mg, as.integer(input_id)), mg)) %>% 
@@ -396,15 +438,22 @@ all_imputed <- mg_missing %>%
 
 # Problem 2
 
+```{r}
+library(data.table)
+library(tidyverse)
+library(rsample)
+library(recipes)
+```
+
+
+# Problem 2
+
 > 1. (0 pts) Investigate this data set of home prices in King County (USA).
 
 > 2. (5 pts) Save the price column in a separate vector/dataframe called target_data. Move all of the columns except the ID, date, price, yr_renovated, zipcode, lat, long, sqft_living15, and sqft_lot15 columns into a new data frame called train_data.
 
 
 ```{r}
-# loading data.table for performance
-library(data.table)
-
 housing <- read_csv("data/kc_house_data.csv") %>% 
   select(-c(id, date, yr_renovated, zipcode, lat, long, sqft_living15, sqft_lot15))
 ```
@@ -421,35 +470,47 @@ house_rec <- recipe(price ~ ., data = housing,
              min = 0, max = 1) %>% 
   prep()
 
-# preprocessed
+# extract the pre-processed data 
 house_pp <- juice(house_rec) %>% 
   mutate(id = row_number())
 
+# split the data into 50%
 house_split <- initial_split(house_pp, .5)
 ```
+
+The below code chunk is similar to the `tidy_dist()` function above but it utilizes `data.table` rather than `tidyr` for data reshaping. This is done for performance puproses. Manipulating matrixes is a very computationally intesive exercise. In order for this to be performative, C++ code would need to be written. As noted previously, KNN does not scale well.
 
 
 ```{r}
 # define distance function using data.table
 dt_dist <- function(df, id_col) {
+  
+  # calculate the euclidian distance between all observations
+  # cast as a matrix
   mdist <- select(df, - {{ id_col }}) %>% 
     dist(diag = TRUE, upper = FALSE) %>% 
     as.matrix(labels = TRUE)
   
+  # convert the matrix to a data.table
+  # reshape into tidy format with `melt()`
+  # cast back into a tibble
   ret <- as.data.table(mdist) %>% 
     setNames(as.character(pull(df, {{ id_col }}))) %>% 
-    .[, id := 1:nrow(.)] %>% 
+    .[, id := pull(df, {{ id_col }})] %>% 
     setkey(id) %>% 
     melt(id.vars = "id",
          variable.name = "item2", 
          value.name = "distance") %>% 
     as_tibble()
   
+  # remove the lower triangle
   ret[!upper.tri(mdist),] %>%
     # remove diag
     filter(distance != 0)
 }
 ```
+
+The below code chunk creates a new data frame with the required field.
 
 ```{r}
 new_df <- tibble(
@@ -466,40 +527,98 @@ new_df <- tibble(
   sqft_basement = 820,
   yr_built = 1978
 )
-
-full_df <- bake(house_rec, new_df) %>% 
-  mutate(id = 999) %>% 
-  bind_rows(training(house_split))
-
-house_dist <- dt_dist(full_df, id)
-
-k <- 4 
-
-top_k <- house_dist %>% 
-  group_by(item2) %>% 
-  top_n(distance, k)
-  
-  
 ```
-
-
 
 > 4. (15 pts) Build a function called knn.reg that implements a regression version of kNN that averages the prices of the k nearest neighbors using a weighted average where the weight is 3 for the closest neighbor, 2 for the second closest and 1 for the remaining neighbors (recall that a weighted average requires that you divide the sum product of the weight and values by the sum of the weights).
 
-> It must use the following signature:
-
-> knn.reg(new_data, target_data, train_data, k)
-
-> where new_data is a data frame with new cases, target_data is a data frame with a single column of prices from (2), train_data is a data frame with the features from (2) that correspond to a price in target_data, and k is the number of nearest neighbors to consider. It must return the predicted price.
+The below code chunk creates a function for calculating the k nearest neighbors and returns the weighted average of the specified `target` column. 
 
 Note that using a period in a function name denotes the use of an S3 class and as such can create issues in class differentiation. For this reason I will not use a period in the function name. Please see the [Syntax section](https://style.tidyverse.org/syntax.html#object-names) of the R Style Guide. 
 
-
-(5 pts) Forecast the price of this new home using your regression kNN using k = 4:
-bedrooms = 4 | bathrooms = 3 | sqft_living = 4852 | sqft_lot = 10244 | floors = 3 | waterfront = 0 | view = 1 | condition = 3 | grade = 11
-sqft_above = 1960 | sqft_basement = 820 | yr_built = 1978
+Addionally, I've reordered and renamed the function arguments to be more informative and instinctually positioned. The function takes `target` as the unquoted column name from `train` and utilized `{{ }}` for tidy evaluation. 
 
 ```{r}
-sessionInfo()
+# The data needs to be pre-processed
+# I'm providing the recipe object inside of the function
+# this makes it rely on external objects.
+# This is not good practice. You _must_ run the above code first
+knn_reg <- function(new_data, train, target, k) {
+  
+  # apply the pre-processing steps to the new data and "training" data
+  # create an ID column as needed for the distance formula
+  full_df <- bake(house_rec, new_data) %>% 
+    mutate(id = -999) %>% 
+    bind_rows(
+      bake(house_rec, train) %>% 
+        mutate(id = row_number())
+    )
+  
+  # calculate euclidean distance 
+  house_dist <- dt_dist(full_df, id)
+  
+  # find k nearest neighbors 
+  top_k <- house_dist %>% 
+    # removing factor class as it slows it down
+    mutate(item2 = as.character(item2)) %>% 
+    group_by(item2) %>% 
+    # grab the k nears neighbors based on distance measure
+    top_n(-k, distance) %>% 
+    # calculating the descending rank which will be used as the weight
+    mutate(rank = frankv(distance, order = -1))
+  
+  top_k %>% 
+    # join back to original data to get target column values from
+    # the "train" data
+    left_join(full_df, by = "id") %>% 
+    # identify only the `new_data`
+    filter(item2 == -999) %>% 
+    # calculate the weighted average and the unweighted average
+    summarise(wgt_estimate = sum(({{ target }} * rank)) / sum(rank),
+           estimate = mean(price))
+}
 ```
+
+> 5. (5 pts) Forecast the price of this new home using your regression kNN using k = 4:
+
+Identify the weighted average of `price` based on the 4 nearest neighbors for the `new_df`.
+
+```{r}
+pred <- knn_reg(new_df, training(house_split), price, 4)
+
+pred
+```
+
+
+## Recreating the environment
+
+If your machine has outdated R packages, try restoring the environment used in this project. To do so, install the `renv` package from CRAN and restore the package environment from the `renv.lock` file.
+
+To do so, I would recommend copying the R project. 
+
+Navigate `File > New Project > Version Control > Git` and put in the URL `https://github.com/JosiahParry/da5030`.
+
+Once in the project navigate to the console and enter
+
+```
+renv::init()
+renv::restore()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

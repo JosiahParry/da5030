@@ -143,5 +143,7 @@ Identify the weighted average of `price` based on the 4 nearest neighbors for th
 
 ```{r}
 pred <- knn_reg(new_df, training(house_split), price, 4)
+
+pred
 ```
 

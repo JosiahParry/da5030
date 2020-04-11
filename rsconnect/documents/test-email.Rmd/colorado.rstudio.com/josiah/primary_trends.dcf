@@ -1,0 +1,12 @@
+name: primary_trends
+title: Primary Trends
+username: josiah
+account: josiah
+server: colorado.rstudio.com
+hostUrl: https://colorado.rstudio.com/rsc/__api__
+appId: 4391
+bundleId: 34184
+url: https://colorado.rstudio.com/rsc/primary-trends/
+when: 1581693764.96987
+asMultiple: FALSE
+asStatic: FALSE

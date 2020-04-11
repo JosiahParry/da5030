@@ -1,0 +1,160 @@
+---
+title: "Practicum Part II "
+author: "Josiah Parry"
+output:
+  pdf_document:
+    latex_engine: xelatex
+mainfont: "DejaVu Sans"
+font-family: "Times New Roman"
+---
+
+
+## Environment and data set up
+
+The below code chunk loads the requisite libraries for this analysis. 
+
+```{r, message=FALSE}
+library(tidyverse)
+library(tidymodels)
+
+
+cars <- readxl::read_excel("data/kellycarsalesdata.xlsx") %>% 
+  janitor::clean_names()
+```
+
+Using `rsample` I partition my data. 
+
+```{r}
+init_split <- initial_split(cars)
+car_train <- training(init_split)
+car_testing <- testing(init_split)
+```
+
+## 3. Outliers 
+
+```{r results="asis"}
+skimr::skim(cars) %>% 
+  select(-c(n_missing, complete_rate))
+```
+
+Upon looking at the distributions of the numeric variables, I feel confident in that there are no true outliers. Perhaps we can identify a few in `price`, but dollar values are always heavily right skewed and this is a fact of wealth accumulations and pricing. Perhaps we can find a few values that exceed the 1.5 IQR ranges. To check, I will use the `anomalize` package by Matt Dancho of Business Science University to check both the mileage and the price columns as these are our only continuous variables. 
+
+
+```{r}
+# outliers where? in every single column?
+# no outliers in mileage
+anomalize::anomalize(cars, mileage) %>% 
+  count(anomaly)
+
+# 5 outliers of price using iqr
+anomalize::anomalize(cars, price) %>% 
+  count(anomaly)
+```
+
+I will create a tibble containing the original data less the 5 observations that are deemed anomalies via IQR method. We could also use the GESD Method, but this is computational intensive and unnecessary at the moment. 
+
+```{r}
+cars_no_anomaly <- anomalize::anomalize(cars, price) %>% 
+  filter(anomaly == "No") %>% 
+  select(-anomaly, -price_l1, -price_l2)
+```
+
+## 4. Distributions
+
+The distributions were visualized with `skimr::skim()` previously. The only variables which are continuous are `mileage` and `price`. These two variables display characteristics of normality with a right skew. We should use a heteroskedastic robust linear regression model to deal with the inevitible heteroskedacity due to a log normal distribution in price. We can transform the variables but the skews are not heavy enough to warrant log or inverse methods. Perhaps a square root transformation would be appropriate. Before making such an adjustment I would prefer to fit the model as is.
+
+## 5. Correlations
+
+To create the initial correlations, I will use the `corrr` package from tidymodels.
+
+```{r}
+corrr::correlate(select_if(cars, is.numeric)) %>% 
+  corrr::focus(price) %>% 
+  arrange(-abs(price))
+```
+There are strong correlations between price and cylinder, and price and liter.
+
+To visualize the correlation matrix, I will use `corrplot`. First, I select only the numeric variables from the tibble, create a correlation matrix, and then create a correlation plot.
+
+```{r}
+select_if(cars, is.numeric) %>% 
+  cor() %>% 
+  corrplot::corrplot()
+```
+
+Given the above plot there is a high amount of colinearity between liter and cylinder. One of these variables should likely be omitted. 
+
+## 6. Fitting a regression
+
+This question requests principle components but there is no instruction to perform PCA, as such, I will not do that. I will use the `estimatr` package to fit a linear regression.
+
+```{r}
+lm_1 <- estimatr::lm_robust(price ~ ., data = car_train) 
+
+lm_1 %>% 
+  broom::tidy() %>% 
+  knitr::kable(digits = 3)
+```
+
+
+```{r}
+broom::glance(lm_1) %>% 
+  knitr::kable(digits = 3)
+```
+
+The above model has created a very strong linear model. We see that this model explains nearly 88% of the variance in our response variable. 
+
+It appears that the biggest contributor to a car's price is the make of it. Perhaps, more than anything, we are purchasing names rather than the quality of car. Cadillac's unsurprisingly, add the most value to a car, followed by SAAB. Cadillac's, unlike SAABs, are still being produced today. Given an average car, we can anticipate that the baseline cost will be around $32k.
+
+
+## 7 variable selection by p-value
+
+We should not curate our linear models to only include "statistically significant" variables. This ruins the interprative powers of a linear regression. However, I will do so as these are the instructions. 
+
+```{r}
+lm_2 <- estimatr::lm_robust(price ~ mileage + make + cylinder + liter + doors + cruise + sound, data = car_train)
+lm_3 <- estimatr::lm_robust(price ~ mileage + make + liter + doors + cruise + sound, data = car_train)
+lm_4 <- estimatr::lm_robust(price ~ mileage + make + liter + doors + sound, data = car_train)
+lm_final <- estimatr::lm_robust(price ~ mileage + make + liter + doors, data = car_train)
+```
+
+```{r}
+broom::tidy(lm_final) %>% 
+  knitr::kable(digits = 3)
+```
+
+
+```{r}
+broom::glance(lm_final)
+```
+
+This final model performs as well as the original one. Now, if we are after performance and not inference, this is a completely fine conclusion. 
+
+We find that, like the original model, the make of a car has the biggest impact on the value of a car. Now that we have removed some variables—such as cylinders—other variables will be compensating for the variance that is explained by them. For example we know that cylinders and liters are highly correlated—though not completely—so liters is likely taking on a bit of the explanatory power of cylinders. 
+
+
+## 8 Leather
+
+According to the initial model, the presence of a leather interior increase value only by 3 dollars. The last model generated does not include the variable at all, thus we can infer that it does not add any value.
+
+## 9.
+
+The inclusion of year is misleading as this is not included in the dataset. 
+
+```{r}
+test_val <- tibble(
+  doors = 4,
+  make = "SAAB",
+  mileage = 61435,
+  cruise = 1,
+  cylinder = 4,
+  liter = 2.3,
+  sound = 1,
+  leather = 1
+)
+
+estimatr:::predict.lm_robust(lm_1, test_val, interval = "confidence")
+estimatr:::predict.lm_robust(lm_final, test_val, interval = "confidence")
+```
+
+The predictions for our example SAAB car are _very_ similar. However, due to the inclusion of different variables, we are returned very slightly different prediction intervals. 

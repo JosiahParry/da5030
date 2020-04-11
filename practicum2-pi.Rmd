@@ -1,3 +1,16 @@
+---
+title: "Practicum 2 Part I"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Package Loading and Data reading 
+
+```{r}
 library(tidyverse)
 library(rsample)
 library(recipes)
@@ -7,16 +20,29 @@ colnames <- c("age", "work_class", "fnlwgt", "education", "education_num",
               "capital_gain", "capital_loss", "hours_per_week", "native_country", "inc_group")
 
 
-census <- read_csv("http://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data", 
+census <- read_csv("http://archive.ics.uci.edu/ml/machine-learning-databases/adult/adult.data",
                    col_names = colnames) %>% 
   mutate_if(is.character, as.factor)
+```
 
+## 3. Data partitioning
 
+I split the data using `rsample`. 
+
+> Note that I am stratifying the sample by country because without this the Rmd wouldn't knit properly even though the code runs from top to bottom without a hitch.
+
+```{r}
 # split data
-init_split <- initial_split(census, .8)
+init_split <- initial_split(census, .8, strata = native_country)
 census_train <- training(init_split)
 census_test <- testing(init_split)
+```
 
+## 4. Model Fit
+
+First I define the formula to prevent excessive text. Next I define the preprocessing step in the recipe. Following, I apply the preprocessing steps to both the training and testing data.
+
+```{r}
 #------------------------------- define formula -------------------------------#
 fit_form <- formula(inc_group ~ education + native_country + work_class + race + age + sex + native_country)
 
@@ -28,7 +54,11 @@ fit_rec <- recipe(fit_form, census_train) %>%
 # apply preprocessing 
 baked_train <- bake(fit_rec, census_train)
 baked_test <- bake(fit_rec, census_test)
+```
 
+In this next code chunk I fit all four models as requested. 
+
+```{r}
 #------------------------------------------------------------------------------#
 #                                 Train Models                                 #
 #------------------------------------------------------------------------------#
@@ -44,6 +74,11 @@ e1071_nb <- e1071::naiveBayes(fit_form, data = baked_train)
 #-------------------------------- logit model ---------------------------------#
 logit_fit <- glm(fit_form, family = "binomial", data = baked_train)
 
+```
+
+In this next section I define a function that will predict the class using each of the above four models. It then takes a majority vote. That vote result is what is used in the ensemble prediction. I include the `Mode` function definiiton within the `pred_ensemble()` function definition. This is **bad practice** but alas, I am not making a package. The next important part of the function definition is to create a tibble which contains all of the prediction.
+
+```{r}
 #------------------------------- ensemble model -------------------------------#
 # There is no definition of what kind of ensembling to use. For that reason
 # I will use a majority vote method
@@ -67,15 +102,24 @@ pred_ensemble <- function(new_data) {
          e1071 = e1071_preds,
          logit = logit_preds) %>% 
     mutate_all(as.character) %>% 
+    # create a vector of all of the prediction results per row
     mutate(ensemble_vote = pmap(list(klar, nb, e1071, logit), c),
+           # find the modal value
            ensemble_vote = map_chr(ensemble_vote, Mode))
   
 }
+```
+
+Next, I apply the ensemble voting method to the testing set. 
 
 
+```{r}
 pred_ensemble(baked_test)
+```
 
+Given the example values, I create a tibble and then apply the pre-processing recipe. Then, I create use the ensemble method function to get all prediction results.
 
+```{r}
 #------------------------------------------------------------------------------#
 #                                   Predict                                    #
 #------------------------------------------------------------------------------#
@@ -94,7 +138,13 @@ rare_human <- tibble(
 
 pred_ensemble(rare_human)
 # this woman makes less than 50k
+```
 
+The results of this prediction indicate that this individual absolutely does not make more than 50 thousand dollars annually. I mean, what local government work does? 
+
+Finally, it is always imperative to evaluate model performance. I create predictions for all models using the ensemble function. Then, I add the original $y$ values to the predicted data set which will be used as the `truth`. Following, I manually create all of the confusion matrixes and calculate the accuracy.
+
+```{r}
 #------------------------------------------------------------------------------#
 #                               Model Evaluation                               #
 #------------------------------------------------------------------------------#
@@ -114,3 +164,5 @@ pivot_longer(all_preds, cols = -truth, "model") %>%
   group_by(model) %>% 
   summarise(accuracy = mean(same))
 
+```
+What is beautiful about this is that it is very clear that all of the naive bayes models are well implemented because they return the exact same results for the confusion matrixes and accuracy. 

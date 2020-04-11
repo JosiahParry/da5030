@@ -1,0 +1,50 @@
+---
+title: "Primary Candidate Trends"
+params:
+  email_body: ''
+  end: !r Sys.Date()
+  begin: !r Sys.Date() - 14
+---
+
+```{r message=FALSE}
+library(tidyverse)
+library(trendyy)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## My Personal Take
+
+
+`r params$email_body`
+
+## Candidate trends from `r params$begin` to `r params$end`
+
+```{r}
+candidates <- c("Joe Biden", "Bernie Sanders", "Elizabeth Warren", "Amy Klobuchar", "Pete Buttigieg")
+
+candidate_trends <- trendy(search_terms = candidates,
+                           from = params$begin, to = params$end)
+
+candidate_trends
+```
+
+
+```{r}
+popularity <- get_interest(candidate_trends)
+
+ggplot(popularity,
+       aes(x = date, y = hits, color = keyword)) + 
+  geom_line() +
+  labs(x = "", y = "Search Popularity", 
+       title = "Google popularity of top 5 polling candidates") + 
+  theme_minimal() +
+  theme(legend.position = "bottom", 
+        legend.title = element_blank())
+```
+
+
+

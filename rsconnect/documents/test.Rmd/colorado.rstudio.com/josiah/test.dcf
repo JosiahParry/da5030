@@ -1,0 +1,12 @@
+name: test
+title: test
+username: josiah
+account: josiah
+server: colorado.rstudio.com
+hostUrl: https://colorado.rstudio.com/rsc/__api__
+appId: 5052
+bundleId: 35284
+url: https://colorado.rstudio.com/rsc/content/5052/
+when: 1584973154.40438
+asMultiple: FALSE
+asStatic: FALSE
